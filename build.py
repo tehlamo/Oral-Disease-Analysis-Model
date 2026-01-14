@@ -1,141 +1,138 @@
 import os
-import shutil
 import zipfile
+import shutil
 import random
+import glob
+from datetime import datetime
 
 # --- CONFIGURATION ---
-# Define paths for source archives and destination directory
-MULTI_ZIP_PATH = os.path.join("downloads", "multi.zip")
-CARIES_ZIP_PATH = os.path.join("downloads", "caries.zip")
-HEALTHY_ZIP_PATH = os.path.join("downloads", "healthy.zip")
-
-DEST_DIR = "raw_data"
+DOWNLOADS_DIR = "downloads"
+RAW_DATA_DIR = "raw_data"
+LOG_DIR = "logs"
+TARGET_SIZE_PER_CLASS = 1500  # Cap for diseases
+HEALTHY_LIMIT = 500           # Cap for healthy/background
 # ---------------------
 
-def find_matching_image(txt_path, search_root):
-    """
-    Locates the corresponding image file for a given text annotation file.
-    Searches in the same directory, parallel 'images' directories, and recursively.
-    """
-    basename = os.path.splitext(os.path.basename(txt_path))[0]
-    parent_dir = os.path.dirname(txt_path)
+def log_to_file(lines):
+    os.makedirs(LOG_DIR, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_file = os.path.join(LOG_DIR, "build_log.txt")
     
-    # 1. Check for image in the same directory
-    for ext in [".jpg", ".jpeg", ".png", ".JPG", ".PNG"]:
-        path = os.path.join(parent_dir, basename + ext)
-        if os.path.exists(path): return path
+    with open(log_file, "w") as f:
+        f.write(f"=== DATA BUILD LOG ({timestamp}) ===\n")
+        f.write("\n".join(lines))
+        f.write("\n======================================\n")
+    print(f"📄 Log saved to: {log_file}")
+
+def build_dataset():
+    log_buffer = []
+    
+    # Clean and recreate raw_data
+    if os.path.exists(RAW_DATA_DIR):
+        shutil.rmtree(RAW_DATA_DIR)
+    os.makedirs(RAW_DATA_DIR)
+    
+    log_buffer.append(f"Action: Recreated '{RAW_DATA_DIR}' directory.")
+    print(f"Directory cleared and recreated: {RAW_DATA_DIR}")
+
+    # --- PROCESS MULTI-DISEASE ZIP ---
+    multi_zip = os.path.join(DOWNLOADS_DIR, "multi.zip")
+    if os.path.exists(multi_zip):
+        print(f"Processing archive: {multi_zip}")
+        log_buffer.append(f"Source: {multi_zip}")
+        
+        with zipfile.ZipFile(multi_zip, 'r') as zip_ref:
+            file_list = zip_ref.namelist()
+            txt_files = [f for f in file_list if f.endswith('.txt') and not f.startswith('__MACOSX')]
+            log_buffer.append(f"  - Labels found in archive: {len(txt_files)}")
+            print(f"Labels found in archive: {len(txt_files)}")
+
+            count = 0
+            for txt_file in txt_files:
+                # Extract .txt
+                zip_ref.extract(txt_file, RAW_DATA_DIR)
+                base_name = os.path.splitext(os.path.basename(txt_file))[0]
+                
+                # Find and extract matching image
+                img_extensions = ['.jpg', '.jpeg', '.png', '.JPG', '.PNG']
+                found_img = False
+                for ext in img_extensions:
+                    img_name = txt_file.replace('.txt', ext)
+                    if img_name in file_list:
+                        zip_ref.extract(img_name, RAW_DATA_DIR)
+                        found_img = True
+                        break
+                
+                if found_img:
+                    count += 1
             
-    # 2. Check for standard dataset structure (labels/ vs images/)
-    if "labels" in parent_dir:
-        img_dir = parent_dir.replace("labels", "images")
-        for ext in [".jpg", ".jpeg", ".png", ".JPG", ".PNG"]:
-            path = os.path.join(img_dir, basename + ext)
-            if os.path.exists(path): return path
+            log_buffer.append(f"  - Images extracted: {count}")
+            print(f"Multi-Disease images imported: {count}")
 
-    # 3. Perform recursive search in root directory
-    for root, dirs, files in os.walk(search_root):
-        for file in files:
-            if os.path.splitext(file)[0] == basename and file.lower().endswith(('.jpg', '.jpeg', '.png')):
-                return os.path.join(root, file)
-    return None
-
-def process_zip(zip_path, prefix, limit=None, is_healthy=False):
-    print(f"Processing archive: {zip_path}")
-    
-    if not os.path.exists(zip_path):
-        print(f"Error: File not found at {zip_path}")
-        return 0
-
-    # Create temporary extraction directory
-    temp_dir = f"temp_{prefix}"
-    if os.path.exists(temp_dir): shutil.rmtree(temp_dir)
-    
-    try:
-        with zipfile.ZipFile(zip_path, 'r') as z:
-            z.extractall(temp_dir)
-    except Exception as e:
-        print(f"Error extracting archive: {e}")
-        return 0
-    
-    # CASE A: Process Healthy Data (Images only, discard labels)
-    if is_healthy:
-        count = 0
-        valid_images = []
+    # --- PROCESS CARIES ZIP (Balanced) ---
+    caries_zip = os.path.join(DOWNLOADS_DIR, "caries.zip")
+    if os.path.exists(caries_zip):
+        print(f"Processing archive: {caries_zip}")
+        log_buffer.append(f"Source: {caries_zip}")
         
-        for root, dirs, files in os.walk(temp_dir):
-            for file in files:
-                if file.lower().endswith(('.jpg', '.jpeg', '.png', '.JPG')):
-                    valid_images.append(os.path.join(root, file))
-        
-        if limit: random.shuffle(valid_images)
-        
-        for src_path in valid_images:
-            if limit and count >= limit: break
+        with zipfile.ZipFile(caries_zip, 'r') as zip_ref:
+            all_files = zip_ref.namelist()
+            txt_files = [f for f in all_files if f.endswith('.txt') and "train" in f]
             
-            new_name = f"{prefix}_{os.path.basename(src_path)}"
-            try:
-                shutil.copy2(src_path, os.path.join(DEST_DIR, new_name))
+            log_buffer.append(f"  - Total labels available: {len(txt_files)}")
+            print(f"Labels found in archive: {len(txt_files)}")
+            
+            # Shuffle and limit
+            random.shuffle(txt_files)
+            selected_files = txt_files[:TARGET_SIZE_PER_CLASS]
+            
+            count = 0
+            for txt_file in selected_files:
+                zip_ref.extract(txt_file, RAW_DATA_DIR)
+                
+                # Extract corresponding image
+                img_extensions = ['.jpg', '.jpeg', '.png']
+                for ext in img_extensions:
+                    img_name = txt_file.replace('.txt', ext)
+                    if img_name in all_files:
+                        zip_ref.extract(img_name, RAW_DATA_DIR)
+                        count += 1
+                        break
+            
+            log_buffer.append(f"  - Images imported (Capped): {count}")
+            print(f"Caries images imported: {count}")
+
+    # --- PROCESS HEALTHY ZIP ---
+    healthy_zip = os.path.join(DOWNLOADS_DIR, "healthy.zip")
+    if os.path.exists(healthy_zip):
+        print(f"Processing archive: {healthy_zip}")
+        log_buffer.append(f"Source: {healthy_zip}")
+        
+        with zipfile.ZipFile(healthy_zip, 'r') as zip_ref:
+            all_files = zip_ref.namelist()
+            img_files = [f for f in all_files if f.endswith(('.jpg', '.png', '.jpeg'))]
+            
+            random.shuffle(img_files)
+            selected = img_files[:HEALTHY_LIMIT]
+            
+            count = 0
+            for img in selected:
+                zip_ref.extract(img, RAW_DATA_DIR)
                 count += 1
-            except Exception: pass
             
-        shutil.rmtree(temp_dir)
-        return count
+            log_buffer.append(f"  - Healthy images imported: {count}")
+            print(f"Healthy images imported: {count}")
 
-    # CASE B: Process Annotated Data (Image and Text pairs)
-    all_txt = []
-    for root, dirs, files in os.walk(temp_dir):
-        for f in files:
-            # Filter for annotation files only
-            if f.endswith(".txt") and "classes" not in f and "data" not in f:
-                all_txt.append(os.path.join(root, f))
+    # Final Count
+    total_files = len(glob.glob(os.path.join(RAW_DATA_DIR, "*")))
+    images = [f for f in glob.glob(os.path.join(RAW_DATA_DIR, "*")) if f.endswith(('.jpg', '.png'))]
     
-    print(f"Labels found in archive: {len(all_txt)}")
-    if limit: random.shuffle(all_txt)
+    summary = f"Dataset construction complete. Total images: {len(images)}"
+    log_buffer.append(summary)
+    print(summary)
     
-    count = 0
-    for txt in all_txt:
-        if limit and count >= limit: break
-        
-        img = find_matching_image(txt, temp_dir)
-        if img:
-            # Rename files to prevent naming conflicts
-            new_txt = f"{prefix}_{os.path.basename(txt)}"
-            new_img = f"{prefix}_{os.path.basename(img)}"
-            try:
-                shutil.copy2(txt, os.path.join(DEST_DIR, new_txt))
-                shutil.copy2(img, os.path.join(DEST_DIR, new_img))
-                count += 1
-            except Exception: pass
-            
-    shutil.rmtree(temp_dir)
-    return count
-
-def rebuild_dataset():
-    # Clear existing data directory
-    if os.path.exists(DEST_DIR): shutil.rmtree(DEST_DIR)
-    os.makedirs(DEST_DIR, exist_ok=True)
-    print(f"Directory cleared and recreated: {DEST_DIR}")
-
-    # 1. Import Multi-Disease Dataset (Base)
-    c_multi = process_zip(MULTI_ZIP_PATH, "multi")
-    print(f"Multi-Disease images imported: {c_multi}")
-
-    # 2. Import Caries Dataset (Balanced)
-    # Limit caries samples to 1.2x the count of multi-disease samples to prevent class imbalance
-    limit_caries = int(c_multi * 1.2) if c_multi > 0 else 2000
-    print(f"Applying balance limit to Caries dataset: {limit_caries}")
-    c_caries = process_zip(CARIES_ZIP_PATH, "zenodo", limit=limit_caries)
-    print(f"Caries images imported: {c_caries}")
-
-    # 3. Import Healthy Dataset (Balanced)
-    # Limit healthy samples to 0.5x the count of multi-disease samples
-    limit_healthy = int(c_multi * 0.5) if c_multi > 0 else 1000
-    print(f"Importing Healthy/Background images (Limit: {limit_healthy})...")
-    c_healthy = process_zip(HEALTHY_ZIP_PATH, "healthy", limit=limit_healthy, is_healthy=True)
-    print(f"Healthy images imported: {c_healthy}")
-
-    print("-" * 40)
-    print(f"Dataset construction complete. Total images: {c_multi + c_caries + c_healthy}")
+    # Write Log
+    log_to_file(log_buffer)
 
 if __name__ == "__main__":
-    rebuild_dataset()
+    build_dataset()
