@@ -4,9 +4,9 @@
 #SBATCH --error=logs/slurm_error.txt
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=16G
-#SBATCH --time=05:00:00
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=32G
+#SBATCH --time=10:00:00
 
 # Load environment
 module load python/3.10
