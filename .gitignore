@@ -9,12 +9,12 @@ __pycache__/
 venv/
 .env
 
-# --- Data Folders (CRITICAL) ---
+# --- Data Folders & Files---
 # Never commit raw datasets or temp folders
 raw_data/
-data_splits/
 downloads/
 temp_*/
+train_list.txt
 
 # --- Large Files & Zips ---
 *.zip

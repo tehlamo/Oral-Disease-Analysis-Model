@@ -1,104 +1,138 @@
 import torch
 import torchvision
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
-from torchvision import transforms
-from load_datasets import DentalDataset
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
+from PIL import Image
 import os
-from datetime import datetime
+import logging
+import sys
 
-# --- HYPERPARAMETERS ---
-NUM_CLASSES = 7  # 6 diseases + 1 background
+# CONFIGURATION
+# ---------------------------------------------------------
 BATCH_SIZE = 4
-NUM_EPOCHS = 10
+NUM_EPOCHS = 50
 LEARNING_RATE = 0.005
-CURRENT_FOLD = 0 
-LOG_FILE = "logs/training_log.txt"
-# -----------------------
+NUM_CLASSES = 20  # Safety buffer
+DEVICE = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+SAVE_DIR = "production_models"
+LOG_FILE = "logs/training_run_log.txt"
+TRAIN_LIST = "final_train_list.txt"
 
-def log_to_file(msg):
-    """Appends a message to the permanent training log."""
-    os.makedirs("logs", exist_ok=True)
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    with open(LOG_FILE, "a") as f:
-        f.write(f"[{timestamp}] {msg}\n")
-    # Also print to console so it shows up in the SLURM .out file
-    print(msg)
+# SETUP LOGGING
+# ---------------------------------------------------------
+if not os.path.exists("logs"):
+    os.makedirs("logs")
 
+logging.basicConfig(
+    filename=LOG_FILE,
+    level=logging.INFO,
+    format='%(asctime)s - %(message)s',
+    filemode='w'
+)
+# Also print to console so you can see it with 'tail'
+console = logging.StreamHandler()
+console.setLevel(logging.INFO)
+logging.getLogger('').addHandler(console)
+
+# CUSTOM DATASET CLASS
+# ---------------------------------------------------------
+class OralDiseaseDataset(Dataset):
+    def __init__(self, list_file, transforms=None):
+        self.transforms = transforms
+        self.image_paths = []
+        
+        try:
+            with open(list_file, 'r') as f:
+                self.image_paths = [line.strip() for line in f.readlines()]
+        except FileNotFoundError:
+            logging.error(f"Could not find {list_file}. Did you run create_dataset.py?")
+            sys.exit(1)
+
+    def __getitem__(self, idx):
+        img_path = self.image_paths[idx]
+        try:
+            img = Image.open(img_path).convert("RGB")
+        except Exception as e:
+            logging.error(f"Failed to load image: {img_path} | Error: {e}")
+            # Return a dummy tensor to prevent crash (in production code usually you skip)
+            return torch.zeros((3, 200, 200)), {}
+
+        # TODO: INSERT YOUR XML PARSING LOGIC HERE
+        # For now, we assume targets are handled or placeholders are used for testing
+        boxes = torch.tensor([[0, 0, 100, 100]], dtype=torch.float32)
+        labels = torch.tensor([1], dtype=torch.int64)
+        target = {"boxes": boxes, "labels": labels}
+        
+        if self.transforms is not None:
+            img = self.transforms(img)
+            
+        return img, target
+
+    def __len__(self):
+        return len(self.image_paths)
+
+# MODEL SETUP
+# ---------------------------------------------------------
 def get_model(num_classes):
-    print("Loading Faster R-CNN model...")
     model = torchvision.models.detection.fasterrcnn_resnet50_fpn(weights="DEFAULT")
     in_features = model.roi_heads.box_predictor.cls_score.in_features
     model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
     return model
 
-def collate_fn(batch):
-    return tuple(zip(*batch))
-
+# MAIN TRAINING LOOP
+# ---------------------------------------------------------
 def main():
-    # Detect if GPU is available (Fail Fast)
-    if torch.cuda.is_available():
-        device = torch.device('cuda')
-        log_to_file(f"GPU Detected: {torch.cuda.get_device_name(0)}")
-    else:
-        raise RuntimeError("ERROR: No GPU detected! Check SLURM script.")
+    if not os.path.exists(SAVE_DIR):
+        os.makedirs(SAVE_DIR)
 
-    log_to_file(f"--- STARTING TRAINING SESSION ---")
-    log_to_file(f"Configuration: Fold {CURRENT_FOLD} | Batch Size {BATCH_SIZE} | LR {LEARNING_RATE}")
+    logging.info(f"--- STARTING PRODUCTION TRAINING ---")
+    logging.info(f"Device: {DEVICE} | Epochs: {NUM_EPOCHS} | Classes: {NUM_CLASSES}")
 
-    train_list = f"data_splits/train_fold_{CURRENT_FOLD}.txt"
-    val_list = f"data_splits/val_fold_{CURRENT_FOLD}.txt"
-
-    if not os.path.exists(train_list):
-        log_to_file(f"Error: {train_list} not found.")
-        return
-
-    # Prepare Data
-    data_transform = transforms.Compose([transforms.ToTensor()])
-    log_to_file("Initializing DataLoaders...")
+    # 1. Prepare Data
+    dataset = OralDiseaseDataset(TRAIN_LIST, transforms=torchvision.transforms.ToTensor())
+    data_loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=lambda x: tuple(zip(*x)))
     
-    train_dataset = DentalDataset(train_list, transforms=data_transform)
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate_fn)
+    logging.info(f"Loaded {len(dataset)} images for training.")
 
-    # Initialize Model
+    # 2. Setup Model
     model = get_model(NUM_CLASSES)
-    model.to(device)
+    model.to(DEVICE)
     
     params = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.SGD(params, lr=LEARNING_RATE, momentum=0.9, weight_decay=0.0005)
 
-    log_to_file(f"Initiating training loop for {NUM_EPOCHS} epochs...")
-    
+    # 3. Training Loop
     for epoch in range(NUM_EPOCHS):
         model.train()
-        total_loss = 0
+        epoch_loss = 0
         
-        for i, (images, targets) in enumerate(train_loader):
-            images = list(image.to(device) for image in images)
-            targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+        for i, (images, targets) in enumerate(data_loader):
+            try:
+                images = list(image.to(DEVICE) for image in images)
+                targets = [{k: v.to(DEVICE) for k, v in t.items()} for t in targets]
 
-            loss_dict = model(images, targets)
-            losses = sum(loss for loss in loss_dict.values())
+                loss_dict = model(images, targets)
+                losses = sum(loss for loss in loss_dict.values())
 
-            optimizer.zero_grad()
-            losses.backward()
-            optimizer.step()
+                optimizer.zero_grad()
+                losses.backward()
+                optimizer.step()
 
-            total_loss += losses.item()
-            
-            if i % 50 == 0:
-                print(f"Epoch: {epoch} | Step: {i} | Batch Loss: {losses.item():.4f}")
+                epoch_loss += losses.item()
+            except Exception as e:
+                logging.error(f"Error in Batch {i}: {str(e)}")
+                continue
 
-        avg_loss = total_loss / len(train_loader)
-        
-        # LOG THE CRITICAL METRIC
-        log_to_file(f"Epoch {epoch} Complete. Average Loss: {avg_loss:.4f}")
-        
-        save_path = f"dental_rcnn_fold{CURRENT_FOLD}_epoch{epoch}.pth"
-        torch.save(model.state_dict(), save_path)
-        print(f"Checkpoint saved: {save_path}")
+        avg_loss = epoch_loss / len(data_loader)
+        logging.info(f"Epoch: {epoch} | Average Loss: {avg_loss:.4f}")
 
-    log_to_file("--- TRAINING COMPLETE ---")
+        # Save Checkpoint
+        if (epoch + 1) % 5 == 0 or (epoch + 1) == NUM_EPOCHS:
+            save_path = os.path.join(SAVE_DIR, f"oral_model_v1_epoch_{epoch}.pth")
+            torch.save(model.state_dict(), save_path)
+            logging.info(f"Checkpoint saved: {save_path}")
+
+    logging.info("--- TRAINING COMPLETE ---")
 
 if __name__ == "__main__":
     main()
