@@ -15,9 +15,8 @@ CLASS_MAPPING = {
     'calculus': 4,
     'plaque': 5,
     'hypodontia': 6,
-    # Common Misspellings / Alternate names found in your data
-    'lessions': 3,  # Fix misspelling to Ulcer
-    'xerostomia': 3 # Map rare class to Ulcer (or remove if preferred)
+    'lessions': 3,
+    'xerostomia': 3
 }
 # ---------------------
 
