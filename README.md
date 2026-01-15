@@ -30,11 +30,12 @@ To reproduce the dataset creation and training pipeline from scratch, execute th
 ### 1. Environment Setup
 ```bash
 python -m venv venv (Mac/Linux)
-
 OR
-
 py -m venv venv (Win)
-pip install -r requirements.txt
+```
+
+```bash
+pip install -r requirements.txt (Ensure that the venv is active)
 ```
 
 ### 2. Data Acquisition
@@ -48,25 +49,33 @@ Once the raw datasets are in place, run the processing scripts in this exact ord
 * **Step 1**
   Validates downloaded files and organizes them for processing.
   ```bash
-  python load_datasets.py
+  python load_datasets.py (Mac/Linux)
+  OR
+  py load_datasets.py (Win)
   ```
 
 * **Step 2**
   Removes invalid annotations, maps class labels (e.g., 'caries' -> Class 1), and cleans metadata.
   ```bash
-  python filter_classes.py
+  python filter_classes.py (Mac/Linux)
+  OR
+  py filter_classes.py (Win)
   ```
 
 * **Step 3**
   Builds the final `raw_data/` directory structure required by the model.
   ```bash
-  python build.py
+  python build.py (Mac/Linux)
+  OR
+  py build.py (Win)
   ```
 
 * **Step 4**
   Scans `raw_data/` and generates the `train_list.txt` master file.
   ```bash
-  python create_dataset.py
+  python create_dataset.py (Max/Linux)
+  OR
+  py create_dataset.py (Win)
   ```
 
 ## Datasets
