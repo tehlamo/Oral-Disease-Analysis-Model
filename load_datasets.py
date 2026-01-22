@@ -22,12 +22,19 @@ class DentalDataset(Dataset):
         self.transforms = transforms
 
     def __getitem__(self, idx):
-        # Load image and convert to RGB to ensure 3 channels
+        """
+        Load image and corresponding annotations for a given index.
+        
+        Returns:
+            image: PIL Image converted to tensor format
+            target: Dictionary containing bounding boxes, labels, and image_id
+        """
+        # Load image and ensure RGB format (3 channels)
         img_path = self.image_paths[idx]
         img = Image.open(img_path).convert("RGB")
         w, h = img.size
 
-        # Derive label path from image path
+        # Locate corresponding annotation file (YOLO format)
         label_path = os.path.splitext(img_path)[0] + ".txt"
 
         boxes = []
@@ -38,33 +45,34 @@ class DentalDataset(Dataset):
                 for line in f:
                     parts = line.strip().split()
 
-                    # Parse YOLO format
+                    # Parse YOLO format: class_id center_x center_y width height (all normalized 0-1)
                     class_id = int(parts[0])
                     cx, cy, bw, bh = map(float, parts[1:5])
 
-                    # Convert normalized coordinates to pixel coordinates
+                    # Convert normalized YOLO coordinates to absolute pixel coordinates (Pascal VOC format)
                     x_min = (cx - bw / 2) * w
                     y_min = (cy - bh / 2) * h
                     x_max = (cx + bw / 2) * w
                     y_max = (cy + bh / 2) * h
 
                     boxes.append([x_min, y_min, x_max, y_max])
-                    labels.append(class_id + 1)
+                    labels.append(class_id + 1)  # Offset by 1: 0=background, 1+=disease classes
 
+        # Convert to tensors: empty tensors for images without annotations (healthy/background)
         if len(boxes) > 0:
             boxes = torch.as_tensor(boxes, dtype = torch.float32)
             labels = torch.as_tensor(labels, dtype = torch.int64)
         else:
-            # Handle healthy/background images
             boxes = torch.zeros((0, 4), dtype = torch.float32)
             labels = torch.zeros((0,), dtype = torch.int64)
 
+        # Format target dictionary for Faster R-CNN compatibility
         target = {}
         target["boxes"] = boxes
         target["labels"] = labels
         target["image_id"] = torch.tensor([idx])
 
-        # Apply image transformations (converting to Tensor)
+        # Apply transformations (typically converts PIL Image to tensor)
         if self.transforms:
             img = self.transforms(img)
 

@@ -8,7 +8,7 @@
 #SBATCH --mem=32G
 #SBATCH --time=10:00:00
 
-# Load environment
+# Load required modules for Oregon State HPC
 module load python/3.10
 module load cuda/11.8
 
@@ -18,8 +18,8 @@ source venv/bin/activate
 # Ensure log directory exists
 mkdir -p logs
 
-# Run the dataset creator first (just to be safe)
+# Generate train/validation/test splits (64/16/20)
 python create_dataset.py
 
-# Run the main training
+# Execute training pipeline with validation loop
 python train_pytorch.py

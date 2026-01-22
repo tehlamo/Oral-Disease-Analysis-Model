@@ -15,6 +15,8 @@ raw_data/
 downloads/
 temp_*/
 train_list.txt
+val_list.txt
+test_list.txt
 
 # --- Large Files & Zips ---
 *.zip
