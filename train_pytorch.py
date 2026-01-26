@@ -115,7 +115,7 @@ def main():
     
     # Adaptive learning rate scheduler: reduces LR by 50% when validation loss plateaus
     lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=LR_SCHEDULER_PATIENCE, verbose=True
+        optimizer, mode='min', factor=0.5, patience=LR_SCHEDULER_PATIENCE
     )
 
     # 2b. Prepare Validation Data
