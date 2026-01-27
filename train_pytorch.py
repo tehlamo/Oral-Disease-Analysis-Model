@@ -160,7 +160,7 @@ def main():
         avg_train_loss = epoch_loss / len(data_loader)
         
         # Validation Loop: Evaluate model performance on held-out validation set
-        model.eval()  # Set model to evaluation mode (disables dropout, batch norm updates)
+        model.train()  # Keep in train mode to get loss_dict (Faster R-CNN returns losses when targets provided)
         val_loss = 0
         with torch.no_grad():  # Disable gradient computation for efficiency
             for images, targets in val_loader:
@@ -169,6 +169,7 @@ def main():
                     targets = [{k: v.to(DEVICE) for k, v in t.items()} for t in targets]
                     
                     loss_dict = model(images, targets)
+                    # loss_dict is a dictionary, sum all loss components
                     losses = sum(loss for loss in loss_dict.values())
                     val_loss += losses.item()
                 except Exception as e:
